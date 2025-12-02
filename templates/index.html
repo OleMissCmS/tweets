@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Twitter Tweet Scraper</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🐦 Twitter Tweet Scraper</h1>
+            <p>Scrape tweets by username with date range and filtering options</p>
+        </header>
+
+        <main>
+            <form id="scrapeForm">
+                <div class="form-group">
+                    <label for="username">Twitter Username:</label>
+                    <input 
+                        type="text" 
+                        id="username" 
+                        name="username" 
+                        placeholder="Enter username (without @)" 
+                        required
+                        autocomplete="off"
+                    >
+                </div>
+
+                <div class="date-range">
+                    <div class="form-group">
+                        <label for="start_date">Start Date (optional):</label>
+                        <input 
+                            type="date" 
+                            id="start_date" 
+                            name="start_date"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="end_date">End Date (optional):</label>
+                        <input 
+                            type="date" 
+                            id="end_date" 
+                            name="end_date"
+                        >
+                    </div>
+                </div>
+
+                <div class="filter-options">
+                    <h3>Filter Options:</h3>
+                    <div class="checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="exclude_retweets" name="exclude_retweets">
+                            <span>Exclude Retweets</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="exclude_replies" name="exclude_replies">
+                            <span>Exclude Replies</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="exclude_quotes" name="exclude_quotes">
+                            <span>Exclude Quote Tweets</span>
+                        </label>
+                    </div>
+                </div>
+
+                <button type="submit" id="scrapeBtn" class="btn btn-primary">
+                    <span id="btnText">Scrape Tweets</span>
+                    <span id="btnSpinner" class="spinner" style="display: none;">⏳</span>
+                </button>
+            </form>
+
+            <div id="results" style="display: none;">
+                <div class="results-header">
+                    <h2>Results</h2>
+                    <div class="results-info">
+                        <span id="tweetCount">0</span> tweets found
+                    </div>
+                </div>
+
+                <div class="download-section">
+                    <button id="downloadJson" class="btn btn-secondary">Download JSON</button>
+                    <button id="downloadCsv" class="btn btn-secondary">Download CSV</button>
+                </div>
+
+                <div id="tweetsList" class="tweets-list"></div>
+            </div>
+
+            <div id="error" class="error-message" style="display: none;"></div>
+        </main>
+
+        <footer>
+            <p>Powered by snscrape</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
+

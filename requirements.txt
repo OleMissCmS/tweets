@@ -1,0 +1,7 @@
+Flask==3.0.0
+snscrape==0.7.0.20230622
+requests==2.31.0
+lxml==5.1.0
+filelock==3.13.1
+gunicorn==21.2.0
+
