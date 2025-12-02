@@ -1,5 +1,5 @@
 Flask==3.0.0
-snscrape==0.7.0.20230622
+git+https://github.com/JustAnotherArchivist/snscrape.git
 requests==2.31.0
 lxml==5.1.0
 filelock==3.13.1
