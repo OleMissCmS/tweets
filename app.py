@@ -16,7 +16,13 @@ def handle_rate_limit(func):
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            error_msg = str(e)
+            # Check for specific error types
+            if '429' in error_msg or 'rate limit' in error_msg.lower():
+                return jsonify({
+                    'error': 'Rate limit exceeded. Please wait a few minutes and try again.'
+                }), 429
+            return jsonify({'error': error_msg}), 500
     return wrapper
 
 @app.route('/')
@@ -69,6 +75,8 @@ def scrape_tweets():
         scraper = TwitterUserScraper(username)
         count = 0
         max_tweets = 10000  # Safety limit
+        consecutive_errors = 0
+        max_consecutive_errors = 3
         
         for tweet in scraper.get_items():
             # Date filtering
@@ -107,12 +115,34 @@ def scrape_tweets():
             if count >= max_tweets:
                 break
             
+            # Reset error counter on success
+            consecutive_errors = 0
+            
             # Small delay to avoid rate limiting
             if count % 50 == 0:
+                time.sleep(1)  # Increased delay
+            elif count % 10 == 0:
                 time.sleep(0.5)
     
     except Exception as e:
-        return jsonify({'error': f'Error scraping tweets: {str(e)}'}), 500
+        error_msg = str(e)
+        # Provide user-friendly error messages
+        if 'failed, giving up' in error_msg or 'requests to' in error_msg:
+            return jsonify({
+                'error': 'Twitter is blocking or rate-limiting requests. This can happen if:\n'
+                        '- Too many requests were made recently\n'
+                        '- Twitter detected automated access\n'
+                        '- The account may be private or suspended\n\n'
+                        'Please try again in a few minutes or try a different username.'
+            }), 429
+        elif 'User unavailable' in error_msg or 'Empty response' in error_msg:
+            return jsonify({
+                'error': 'User not found or account is unavailable. Please check the username and try again.'
+            }), 404
+        else:
+            return jsonify({
+                'error': f'Error scraping tweets: {error_msg}'
+            }), 500
     
     return jsonify({
         'tweets': tweets,

@@ -54,7 +54,14 @@ document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
         displayResults(currentTweets, data.count, data.username);
         
     } catch (error) {
-        showError(error.message || 'Failed to scrape tweets. Please try again.');
+        let errorMessage = error.message || 'Failed to scrape tweets. Please try again.';
+        
+        // Handle multi-line error messages from the server
+        if (errorMessage.includes('\n')) {
+            errorMessage = errorMessage.split('\n').join('<br>');
+        }
+        
+        showError(errorMessage);
     } finally {
         btn.disabled = false;
         btnText.textContent = 'Scrape Tweets';
@@ -116,7 +123,8 @@ function displayResults(tweets, count, username) {
 
 function showError(message) {
     const errorDiv = document.getElementById('error');
-    errorDiv.textContent = message;
+    // Support HTML in error messages
+    errorDiv.innerHTML = message;
     errorDiv.style.display = 'block';
 }
 
