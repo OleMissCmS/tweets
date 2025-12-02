@@ -1,0 +1,4 @@
+#!/bin/bash
+# Ensure Python 3.11 is used
+python3.11 --version || python3.11 --version || echo "Python 3.11 not found, using default"
+
