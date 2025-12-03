@@ -1,5 +1,7 @@
 Flask==3.0.0
-# Primary scraper
+# Twitter API v2 (official) - PRIMARY METHOD
+tweepy>=5.0.0  # Twitter API v2 support
+# Web scrapers (fallbacks)
 git+https://github.com/JustAnotherArchivist/snscrape.git
 # Alternative scrapers
 git+https://github.com/Altimis/Scweet.git

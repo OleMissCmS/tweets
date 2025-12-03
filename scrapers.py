@@ -32,6 +32,154 @@ class TweetScraper(ABC):
         return True
 
 
+class TwitterAPIScraper(TweetScraper):
+    """Twitter API v2 implementation using official API - PRIMARY METHOD"""
+    
+    def get_name(self) -> str:
+        return "Twitter API v2"
+    
+    def is_available(self) -> bool:
+        try:
+            import tweepy
+            bearer_token = os.getenv('TWITTER_BEARER_TOKEN')
+            return bool(bearer_token and bearer_token.strip())
+        except ImportError:
+            return False
+    
+    def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000):
+        import tweepy
+        
+        bearer_token = os.getenv('TWITTER_BEARER_TOKEN', '').strip()
+        if not bearer_token:
+            raise Exception("TWITTER_BEARER_TOKEN not configured")
+        
+        # Initialize Twitter API v2 client
+        client = tweepy.Client(bearer_token=bearer_token, wait_on_rate_limit=True)
+        
+        try:
+            # Get user ID from username
+            user = client.get_user(username=username)
+            if not user.data:
+                raise Exception(f"User '{username}' not found")
+            user_id = user.data.id
+            
+            tweets = []
+            next_token = None
+            tweet_count = 0
+            
+            # Build query with exclusions if needed
+            # Note: Twitter API v2 has different filtering capabilities
+            tweet_fields = [
+                'created_at', 'public_metrics', 'author_id', 'conversation_id',
+                'in_reply_to_user_id', 'referenced_tweets'
+            ]
+            
+            # Paginate through tweets
+            while tweet_count < max_tweets:
+                try:
+                    # Calculate how many tweets to fetch in this batch
+                    max_results = min(100, max_tweets - tweet_count)  # API max is 100 per request
+                    
+                    # Get user's tweets
+                    response = client.get_users_tweets(
+                        id=user_id,
+                        max_results=max_results,
+                        pagination_token=next_token,
+                        tweet_fields=tweet_fields,
+                        exclude=['retweets'] if start_date is None and end_date is None else None,  # Can exclude retweets at API level
+                    )
+                    
+                    if not response.data:
+                        break  # No more tweets
+                    
+                    for tweet in response.data:
+                        # Date filtering
+                        tweet_date = tweet.created_at
+                        if isinstance(tweet_date, str):
+                            tweet_date = datetime.datetime.fromisoformat(tweet_date.replace('Z', '+00:00'))
+                        elif not isinstance(tweet_date, datetime.datetime):
+                            continue
+                        
+                        # Ensure timezone aware
+                        if tweet_date.tzinfo is None:
+                            tweet_date = tweet_date.replace(tzinfo=datetime.timezone.utc)
+                        
+                        if start_date and tweet_date < start_date:
+                            continue
+                        if end_date and tweet_date > end_date:
+                            # Since tweets are in reverse chronological order, we can break
+                            break
+                        
+                        # Determine tweet type
+                        is_retweet = False
+                        is_reply = False
+                        is_quote = False
+                        
+                        if hasattr(tweet, 'referenced_tweets') and tweet.referenced_tweets:
+                            for ref in tweet.referenced_tweets:
+                                if ref.type == 'retweeted':
+                                    is_retweet = True
+                                elif ref.type == 'quoted':
+                                    is_quote = True
+                        
+                        if hasattr(tweet, 'in_reply_to_user_id') and tweet.in_reply_to_user_id:
+                            is_reply = True
+                        
+                        # Get metrics
+                        metrics = tweet.public_metrics if hasattr(tweet, 'public_metrics') else {}
+                        
+                        tweets.append({
+                            'id': str(tweet.id),
+                            'url': f"https://twitter.com/{username}/status/{tweet.id}",
+                            'date': tweet_date.isoformat(),
+                            'content': tweet.text or '',
+                            'user': username,
+                            'reply_count': metrics.get('reply_count', 0),
+                            'retweet_count': metrics.get('retweet_count', 0),
+                            'like_count': metrics.get('like_count', 0),
+                            'quote_count': metrics.get('quote_count', 0),
+                            'is_retweet': is_retweet,
+                            'is_reply': is_reply,
+                            'is_quote': is_quote,
+                        })
+                        
+                        tweet_count += 1
+                        if tweet_count >= max_tweets:
+                            break
+                    
+                    # Check for next page
+                    if hasattr(response, 'meta') and response.meta and 'next_token' in response.meta:
+                        next_token = response.meta['next_token']
+                    else:
+                        break  # No more pages
+                    
+                    # If we hit the date limit, break
+                    if end_date and tweet_date and tweet_date < end_date:
+                        break
+                        
+                except tweepy.TooManyRequests:
+                    logger.warning("Twitter API: Rate limit hit, waiting...")
+                    # wait_on_rate_limit=True should handle this, but just in case
+                    raise Exception("Rate limit exceeded. Please try again later.")
+                except tweepy.Unauthorized:
+                    raise Exception("Twitter API authentication failed. Check TWITTER_BEARER_TOKEN.")
+                except tweepy.NotFound:
+                    raise Exception(f"User '{username}' not found or account is private.")
+                except Exception as e:
+                    logger.error(f"Twitter API error: {e}")
+                    raise
+            
+            return tweets
+            
+        except tweepy.Unauthorized as e:
+            raise Exception(f"Twitter API authentication failed: {e}. Check your Bearer Token.")
+        except tweepy.NotFound as e:
+            raise Exception(f"User '{username}' not found: {e}")
+        except Exception as e:
+            logger.error(f"Twitter API scraping error: {e}")
+            raise
+
+
 class SnscrapeScraper(TweetScraper):
     """snscrape implementation - primary scraper"""
     
@@ -391,10 +539,11 @@ class ScraperManager:
     def _initialize_scrapers(self):
         """Initialize all available scrapers in priority order"""
         scraper_classes = [
-            SnscrapeScraper,  # Primary - most reliable
-            ScweetScraper,    # Alternative 1
-            TweeterPyScraper, # Alternative 2
-            TwikitScraper,    # Alternative 3 - requires auth
+            TwitterAPIScraper,  # PRIMARY - Official Twitter API v2 (most reliable)
+            SnscrapeScraper,    # Fallback 1 - Web scraping
+            ScweetScraper,      # Fallback 2 - Alternative scraper
+            TweeterPyScraper,   # Fallback 3 - Alternative scraper
+            TwikitScraper,      # Fallback 4 - Requires auth
         ]
         
         for scraper_class in scraper_classes:
