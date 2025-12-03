@@ -51,7 +51,8 @@ document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
         }
         
         currentTweets = data.tweets || [];
-        displayResults(currentTweets, data.count, data.username);
+        const scraperUsed = data.scraper_used || 'unknown';
+        displayResults(currentTweets, data.count, data.username, scraperUsed);
         
     } catch (error) {
         let errorMessage = error.message || 'Failed to scrape tweets. Please try again.';
@@ -69,8 +70,12 @@ document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
     }
 });
 
-function displayResults(tweets, count, username) {
+function displayResults(tweets, count, username, scraperUsed) {
     document.getElementById('tweetCount').textContent = count;
+    const scraperInfo = document.getElementById('scraperInfo');
+    if (scraperInfo && scraperUsed) {
+        scraperInfo.textContent = `(via ${scraperUsed})`;
+    }
     document.getElementById('results').style.display = 'block';
     
     const tweetsList = document.getElementById('tweetsList');

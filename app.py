@@ -1,13 +1,21 @@
 from flask import Flask, render_template, request, jsonify, send_file
-from snscrape.modules.twitter import TwitterUserScraper
 import datetime
 import json
 import csv
 import io
 from functools import wraps
-import time
+import logging
+from scrapers import ScraperManager
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# Initialize scraper manager once at startup
+scraper_manager = ScraperManager()
+logger.info(f"Initialized scrapers: {', '.join(scraper_manager.get_available_scrapers())}")
 
 def handle_rate_limit(func):
     """Decorator to handle rate limiting and errors gracefully"""
@@ -69,86 +77,49 @@ def scrape_tweets():
     if start_datetime and end_datetime and start_datetime > end_datetime:
         return jsonify({'error': 'Start date must be before end date'}), 400
     
-    # Scrape tweets
-    tweets = []
-    try:
-        scraper = TwitterUserScraper(username)
-        count = 0
-        max_tweets = 10000  # Safety limit
-        consecutive_errors = 0
-        max_consecutive_errors = 3
+    # Use scraper manager with fallback
+    max_tweets = 10000  # Safety limit
+    
+    result = scraper_manager.scrape_with_fallback(
+        username=username,
+        start_date=start_datetime,
+        end_date=end_datetime,
+        max_tweets=max_tweets,
+        exclude_retweets=exclude_retweets,
+        exclude_replies=exclude_replies,
+        exclude_quotes=exclude_quotes
+    )
+    
+    if result['success']:
+        return jsonify({
+            'tweets': result['tweets'],
+            'count': result['count'],
+            'username': username,
+            'scraper_used': result['scraper_used'],
+            'total_before_filter': result.get('total_before_filter', result['count'])
+        })
+    else:
+        # All scrapers failed - provide helpful error message
+        error_details = result.get('errors', [])
+        available_scrapers = result.get('available_scrapers', [])
         
-        for tweet in scraper.get_items():
-            # Date filtering
-            if start_datetime and tweet.date < start_datetime:
-                continue
-            if end_datetime and tweet.date > end_datetime:
-                break
-            
-            # Type filtering
-            if exclude_retweets and tweet.retweetedTweet is not None:
-                continue
-            if exclude_replies and tweet.inReplyToTweetId is not None:
-                continue
-            if exclude_quotes and tweet.quotedTweet is not None:
-                continue
-            
-            # Convert tweet to dict
-            tweet_data = {
-                'id': str(tweet.id),
-                'url': tweet.url,
-                'date': tweet.date.isoformat(),
-                'content': tweet.rawContent,
-                'user': tweet.user.username if hasattr(tweet.user, 'username') else str(tweet.user),
-                'reply_count': tweet.replyCount,
-                'retweet_count': tweet.retweetCount,
-                'like_count': tweet.likeCount,
-                'quote_count': tweet.quoteCount,
-                'is_retweet': tweet.retweetedTweet is not None,
-                'is_reply': tweet.inReplyToTweetId is not None,
-                'is_quote': tweet.quotedTweet is not None,
-            }
-            
-            tweets.append(tweet_data)
-            count += 1
-            
-            if count >= max_tweets:
-                break
-            
-            # Reset error counter on success
-            consecutive_errors = 0
-            
-            # Small delay to avoid rate limiting
-            if count % 50 == 0:
-                time.sleep(1)  # Increased delay
-            elif count % 10 == 0:
-                time.sleep(0.5)
-    
-    except Exception as e:
-        error_msg = str(e)
-        # Provide user-friendly error messages
-        if 'failed, giving up' in error_msg or 'requests to' in error_msg:
-            return jsonify({
-                'error': 'Twitter is blocking or rate-limiting requests. This can happen if:\n'
-                        '- Too many requests were made recently\n'
-                        '- Twitter detected automated access\n'
-                        '- The account may be private or suspended\n\n'
-                        'Please try again in a few minutes or try a different username.'
-            }), 429
-        elif 'User unavailable' in error_msg or 'Empty response' in error_msg:
-            return jsonify({
-                'error': 'User not found or account is unavailable. Please check the username and try again.'
-            }), 404
-        else:
-            return jsonify({
-                'error': f'Error scraping tweets: {error_msg}'
-            }), 500
-    
-    return jsonify({
-        'tweets': tweets,
-        'count': len(tweets),
-        'username': username
-    })
+        error_message = 'All scrapers failed to retrieve tweets.\n\n'
+        error_message += f'Tried {len(error_details)} scraper(s): {", ".join(available_scrapers)}\n\n'
+        error_message += 'Possible reasons:\n'
+        error_message += '- Twitter is blocking automated requests\n'
+        error_message += '- The account may be private or suspended\n'
+        error_message += '- Rate limiting from Twitter\n'
+        error_message += '- Network connectivity issues\n\n'
+        error_message += 'Please try again in a few minutes or try a different username.'
+        
+        if error_details:
+            error_message += '\n\nTechnical details:\n' + '\n'.join(error_details[:3])  # Show first 3 errors
+        
+        return jsonify({
+            'error': error_message,
+            'errors': error_details,
+            'available_scrapers': available_scrapers
+        }), 500
 
 @app.route('/api/download', methods=['POST'])
 @handle_rate_limit
