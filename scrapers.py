@@ -33,46 +33,119 @@ class TweetScraper(ABC):
 
 
 class TwitterAPIScraper(TweetScraper):
-    """Twitter API v2 implementation using official API - PRIMARY METHOD"""
+    """Twitter API v2 implementation using official X Developer Platform SDK (xdk-python) - PRIMARY METHOD"""
     
     def get_name(self) -> str:
-        return "Twitter API v2"
+        return "Twitter API v2 (xdk)"
     
     def is_available(self) -> bool:
         try:
-            import tweepy
-            bearer_token = os.getenv('TWITTER_BEARER_TOKEN')
-            return bool(bearer_token and bearer_token.strip())
+            from xdk import Client
+            # Check for OAuth 1.0a credentials (preferred)
+            api_key = os.getenv('TWITTER_API_KEY', '').strip()
+            api_secret = os.getenv('TWITTER_API_SECRET', '').strip()
+            access_token = os.getenv('TWITTER_ACCESS_TOKEN', '').strip()
+            access_token_secret = os.getenv('TWITTER_ACCESS_TOKEN_SECRET', '').strip()
+            
+            # Also check for Bearer Token as fallback
+            bearer_token = os.getenv('TWITTER_BEARER_TOKEN', '').strip()
+            
+            # Available if we have OAuth 1.0a OR Bearer Token
+            return bool((api_key and api_secret and access_token and access_token_secret) or bearer_token)
         except ImportError:
             return False
     
     def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000):
-        import tweepy
+        from xdk import Client
+        
+        # Try OAuth 1.0a first (preferred for xdk-python)
+        api_key = os.getenv('TWITTER_API_KEY', '').strip()
+        api_secret = os.getenv('TWITTER_API_SECRET', '').strip()
+        access_token = os.getenv('TWITTER_ACCESS_TOKEN', '').strip()
+        access_token_secret = os.getenv('TWITTER_ACCESS_TOKEN_SECRET', '').strip()
         
         bearer_token = os.getenv('TWITTER_BEARER_TOKEN', '').strip()
-        if not bearer_token:
-            raise Exception("TWITTER_BEARER_TOKEN not configured")
         
-        # Initialize Twitter API v2 client
-        client = tweepy.Client(bearer_token=bearer_token, wait_on_rate_limit=True)
+        # Initialize client - try OAuth 1.0a first, then Bearer Token
+        try:
+            if api_key and api_secret and access_token and access_token_secret:
+                logger.info("Using OAuth 1.0a authentication with xdk")
+                # xdk-python uses OAuth1User for OAuth 1.0a
+                try:
+                    from xdk.auth import OAuth1User
+                    auth = OAuth1User(
+                        consumer_key=api_key,
+                        consumer_secret=api_secret,
+                        access_token=access_token,
+                        access_token_secret=access_token_secret
+                    )
+                    client = Client(auth=auth)
+                except ImportError:
+                    # Fallback: try direct initialization if OAuth1User doesn't exist
+                    client = Client(
+                        api_key=api_key,
+                        api_secret=api_secret,
+                        access_token=access_token,
+                        access_token_secret=access_token_secret
+                    )
+            elif bearer_token:
+                logger.info("Using Bearer Token authentication with xdk")
+                client = Client(bearer_token=bearer_token)
+            else:
+                raise Exception("Twitter API credentials not configured. Set TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, and TWITTER_ACCESS_TOKEN_SECRET.")
+        except Exception as e:
+            logger.error(f"Failed to initialize xdk client: {e}")
+            raise Exception(f"Failed to initialize Twitter API client: {e}")
         
         try:
-            # Get user ID from username
-            user = client.get_user(username=username)
-            if not user.data:
-                raise Exception(f"User '{username}' not found")
-            user_id = user.data.id
+            # Get user by username to get user ID
+            # xdk-python uses client.users.get() or similar
+            try:
+                # Try common API patterns for getting user
+                if hasattr(client, 'users') and hasattr(client.users, 'get'):
+                    user_response = client.users.get(usernames=[username])
+                elif hasattr(client, 'get_user'):
+                    user_response = client.get_user(username=username)
+                else:
+                    # Try direct attribute access
+                    user_response = client.users.get(usernames=[username])
+                
+                # Extract user data from response
+                if not user_response:
+                    raise Exception(f"User '{username}' not found")
+                
+                user_data = None
+                if hasattr(user_response, 'data'):
+                    data = user_response.data
+                    user_data = data[0] if isinstance(data, list) and len(data) > 0 else data
+                elif isinstance(user_response, dict):
+                    user_data = user_response.get('data', [])
+                    user_data = user_data[0] if isinstance(user_data, list) and len(user_data) > 0 else user_data
+                else:
+                    user_data = user_response
+                
+                if not user_data:
+                    raise Exception(f"User '{username}' not found")
+                
+                # Extract user ID
+                user_id = None
+                if hasattr(user_data, 'id'):
+                    user_id = str(user_data.id)
+                elif isinstance(user_data, dict):
+                    user_id = str(user_data.get('id', ''))
+                else:
+                    user_id = str(user_data)
+                
+                if not user_id:
+                    raise Exception(f"Could not extract user ID for '{username}'")
+                    
+            except Exception as e:
+                logger.error(f"Error getting user '{username}': {e}")
+                raise Exception(f"Unable to get user '{username}': {e}")
             
             tweets = []
             next_token = None
             tweet_count = 0
-            
-            # Build query with exclusions if needed
-            # Note: Twitter API v2 has different filtering capabilities
-            tweet_fields = [
-                'created_at', 'public_metrics', 'author_id', 'conversation_id',
-                'in_reply_to_user_id', 'referenced_tweets'
-            ]
             
             # Paginate through tweets
             while tweet_count < max_tweets:
@@ -80,22 +153,59 @@ class TwitterAPIScraper(TweetScraper):
                     # Calculate how many tweets to fetch in this batch
                     max_results = min(100, max_tweets - tweet_count)  # API max is 100 per request
                     
-                    # Get user's tweets
-                    response = client.get_users_tweets(
-                        id=user_id,
-                        max_results=max_results,
-                        pagination_token=next_token,
-                        tweet_fields=tweet_fields,
-                        exclude=['retweets'] if start_date is None and end_date is None else None,  # Can exclude retweets at API level
-                    )
+                    # Get user's tweets using xdk
+                    # xdk-python API: client.tweets.get_user_tweets() or client.posts.get_user_tweets()
+                    try:
+                        # Try tweets API first (most common)
+                        if hasattr(client, 'tweets') and hasattr(client.tweets, 'get_user_tweets'):
+                            response = client.tweets.get_user_tweets(
+                                id=user_id,
+                                max_results=max_results,
+                                pagination_token=next_token,
+                                tweet_fields=['created_at', 'public_metrics', 'author_id', 'conversation_id', 'in_reply_to_user_id', 'referenced_tweets']
+                            )
+                        elif hasattr(client, 'posts') and hasattr(client.posts, 'get_user_tweets'):
+                            # Alternative: posts API
+                            response = client.posts.get_user_tweets(
+                                id=user_id,
+                                max_results=max_results,
+                                pagination_token=next_token
+                            )
+                        elif hasattr(client, 'tweets') and hasattr(client.tweets, 'get'):
+                            # Alternative: tweets.get with user_id parameter
+                            response = client.tweets.get(
+                                id=user_id,
+                                max_results=max_results,
+                                pagination_token=next_token
+                            )
+                        else:
+                            # Last resort: try to find the method dynamically
+                            raise AttributeError("Could not find get_user_tweets method in xdk client")
+                    except AttributeError as e:
+                        logger.error(f"xdk API method not found: {e}")
+                        raise Exception(f"xdk-python API structure may differ. Please check xdk-python documentation. Error: {e}")
+                    except Exception as e:
+                        logger.error(f"Error calling xdk API: {e}")
+                        raise
                     
-                    if not response.data:
+                    # Extract data from response
+                    if not hasattr(response, 'data') or not response.data:
                         break  # No more tweets
                     
+                    tweet_list = response.data if isinstance(response.data, list) else [response.data]
+                    
                     hit_date_limit = False
-                    for tweet in response.data:
+                    for tweet in tweet_list:
                         # Date filtering
-                        tweet_date = tweet.created_at
+                        tweet_date = None
+                        if hasattr(tweet, 'created_at'):
+                            tweet_date = tweet.created_at
+                        elif isinstance(tweet, dict):
+                            tweet_date = tweet.get('created_at')
+                        
+                        if not tweet_date:
+                            continue
+                            
                         if isinstance(tweet_date, str):
                             tweet_date = datetime.datetime.fromisoformat(tweet_date.replace('Z', '+00:00'))
                         elif not isinstance(tweet_date, datetime.datetime):
@@ -117,29 +227,52 @@ class TwitterAPIScraper(TweetScraper):
                         is_reply = False
                         is_quote = False
                         
-                        if hasattr(tweet, 'referenced_tweets') and tweet.referenced_tweets:
-                            for ref in tweet.referenced_tweets:
-                                if ref.type == 'retweeted':
+                        # Check referenced_tweets
+                        ref_tweets = None
+                        if hasattr(tweet, 'referenced_tweets'):
+                            ref_tweets = tweet.referenced_tweets
+                        elif isinstance(tweet, dict):
+                            ref_tweets = tweet.get('referenced_tweets')
+                        
+                        if ref_tweets:
+                            for ref in (ref_tweets if isinstance(ref_tweets, list) else [ref_tweets]):
+                                ref_type = ref.type if hasattr(ref, 'type') else ref.get('type', '')
+                                if ref_type == 'retweeted':
                                     is_retweet = True
-                                elif ref.type == 'quoted':
+                                elif ref_type == 'quoted':
                                     is_quote = True
                         
-                        if hasattr(tweet, 'in_reply_to_user_id') and tweet.in_reply_to_user_id:
+                        # Check if reply
+                        in_reply_to = None
+                        if hasattr(tweet, 'in_reply_to_user_id'):
+                            in_reply_to = tweet.in_reply_to_user_id
+                        elif isinstance(tweet, dict):
+                            in_reply_to = tweet.get('in_reply_to_user_id')
+                        
+                        if in_reply_to:
                             is_reply = True
                         
                         # Get metrics
-                        metrics = tweet.public_metrics if hasattr(tweet, 'public_metrics') else {}
+                        metrics = {}
+                        if hasattr(tweet, 'public_metrics'):
+                            metrics = tweet.public_metrics
+                        elif isinstance(tweet, dict):
+                            metrics = tweet.get('public_metrics', {})
+                        
+                        # Get tweet ID and text
+                        tweet_id = str(tweet.id if hasattr(tweet, 'id') else tweet.get('id', ''))
+                        tweet_text = tweet.text if hasattr(tweet, 'text') else tweet.get('text', '')
                         
                         tweets.append({
-                            'id': str(tweet.id),
-                            'url': f"https://twitter.com/{username}/status/{tweet.id}",
+                            'id': tweet_id,
+                            'url': f"https://twitter.com/{username}/status/{tweet_id}",
                             'date': tweet_date.isoformat(),
-                            'content': tweet.text or '',
+                            'content': tweet_text or '',
                             'user': username,
-                            'reply_count': metrics.get('reply_count', 0),
-                            'retweet_count': metrics.get('retweet_count', 0),
-                            'like_count': metrics.get('like_count', 0),
-                            'quote_count': metrics.get('quote_count', 0),
+                            'reply_count': metrics.get('reply_count', 0) if isinstance(metrics, dict) else (metrics.reply_count if hasattr(metrics, 'reply_count') else 0),
+                            'retweet_count': metrics.get('retweet_count', 0) if isinstance(metrics, dict) else (metrics.retweet_count if hasattr(metrics, 'retweet_count') else 0),
+                            'like_count': metrics.get('like_count', 0) if isinstance(metrics, dict) else (metrics.like_count if hasattr(metrics, 'like_count') else 0),
+                            'quote_count': metrics.get('quote_count', 0) if isinstance(metrics, dict) else (metrics.quote_count if hasattr(metrics, 'quote_count') else 0),
                             'is_retweet': is_retweet,
                             'is_reply': is_reply,
                             'is_quote': is_quote,
@@ -154,29 +287,34 @@ class TwitterAPIScraper(TweetScraper):
                         break
                     
                     # Check for next page
-                    if hasattr(response, 'meta') and response.meta and 'next_token' in response.meta:
-                        next_token = response.meta['next_token']
+                    meta = None
+                    if hasattr(response, 'meta'):
+                        meta = response.meta
+                    elif isinstance(response, dict):
+                        meta = response.get('meta')
+                    
+                    if meta:
+                        next_token = meta.get('next_token') if isinstance(meta, dict) else (meta.next_token if hasattr(meta, 'next_token') else None)
+                        if not next_token:
+                            break  # No more pages
                     else:
                         break  # No more pages
                         
-                except tweepy.TooManyRequests:
-                    logger.warning("Twitter API: Rate limit hit, waiting...")
-                    # wait_on_rate_limit=True should handle this, but just in case
-                    raise Exception("Rate limit exceeded. Please try again later.")
-                except tweepy.Unauthorized:
-                    raise Exception("Twitter API authentication failed. Check TWITTER_BEARER_TOKEN.")
-                except tweepy.NotFound:
-                    raise Exception(f"User '{username}' not found or account is private.")
                 except Exception as e:
-                    logger.error(f"Twitter API error: {e}")
-                    raise
+                    error_msg = str(e)
+                    if '429' in error_msg or 'rate limit' in error_msg.lower():
+                        logger.warning("Twitter API: Rate limit hit, waiting...")
+                        raise Exception("Rate limit exceeded. Please try again later.")
+                    elif '401' in error_msg or 'unauthorized' in error_msg.lower():
+                        raise Exception("Twitter API authentication failed. Check your credentials.")
+                    elif '404' in error_msg or 'not found' in error_msg.lower():
+                        raise Exception(f"User '{username}' not found or account is private.")
+                    else:
+                        logger.error(f"Twitter API error: {e}")
+                        raise
             
             return tweets
             
-        except tweepy.Unauthorized as e:
-            raise Exception(f"Twitter API authentication failed: {e}. Check your Bearer Token.")
-        except tweepy.NotFound as e:
-            raise Exception(f"User '{username}' not found: {e}")
         except Exception as e:
             logger.error(f"Twitter API scraping error: {e}")
             raise

@@ -44,7 +44,17 @@ document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
             })
         });
         
-        const data = await response.json();
+        // Handle JSON parsing with error checking
+        let data;
+        try {
+            const text = await response.text();
+            if (!text || text.trim() === '') {
+                throw new Error('Server returned empty response');
+            }
+            data = JSON.parse(text);
+        } catch (parseError) {
+            throw new Error(`Server error: ${parseError.message}. Response may be empty or invalid.`);
+        }
         
         if (!response.ok) {
             throw new Error(data.error || 'An error occurred');
