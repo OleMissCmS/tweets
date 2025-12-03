@@ -561,32 +561,52 @@ def test_twikit():
 @handle_rate_limit
 def download_tweets():
     """Download tweets as CSV or JSON"""
-    data = request.json
-    format_type = data.get('format', 'json').lower()
-    tweets = data.get('tweets', [])
-    
-    if not tweets:
-        return jsonify({'error': 'No tweets to download'}), 400
-    
-    if format_type == 'csv':
-        # Create CSV
-        output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=[
-            'id', 'url', 'date', 'content', 'user', 'reply_count', 
-            'retweet_count', 'like_count', 'quote_count', 'is_retweet', 
-            'is_reply', 'is_quote'
-        ])
-        writer.writeheader()
-        for tweet in tweets:
-            writer.writerow(tweet)
+    try:
+        if not request.json:
+            return jsonify({'error': 'Request body is required'}), 400
         
-        output.seek(0)
-        return send_file(
-            io.BytesIO(output.getvalue().encode('utf-8')),
-            mimetype='text/csv',
-            as_attachment=True,
-            download_name=f'tweets_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
-        )
+        data = request.json
+        format_type = data.get('format', 'json').lower()
+        tweets = data.get('tweets', [])
+        
+        if not tweets:
+            return jsonify({'error': 'No tweets to download'}), 400
+        
+        if format_type == 'csv':
+            # Create CSV with proper handling of special characters
+            output = io.StringIO()
+            fieldnames = [
+                'id', 'url', 'date', 'content', 'user', 'reply_count', 
+                'retweet_count', 'like_count', 'quote_count', 'is_retweet', 
+                'is_reply', 'is_quote'
+            ]
+            writer = csv.DictWriter(output, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL)
+            writer.writeheader()
+            
+            for tweet in tweets:
+                # Ensure all fields exist and handle None values
+                row = {}
+                for field in fieldnames:
+                    value = tweet.get(field, '')
+                    # Convert None to empty string, boolean to string
+                    if value is None:
+                        value = ''
+                    elif isinstance(value, bool):
+                        value = 'True' if value else 'False'
+                    else:
+                        value = str(value)
+                    row[field] = value
+                writer.writerow(row)
+            
+            output.seek(0)
+            csv_content = output.getvalue()
+            
+            return send_file(
+                io.BytesIO(csv_content.encode('utf-8-sig')),  # UTF-8 BOM for Excel compatibility
+                mimetype='text/csv; charset=utf-8',
+                as_attachment=True,
+                download_name=f'tweets_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+            )
     
     else:  # JSON
         output = io.BytesIO()

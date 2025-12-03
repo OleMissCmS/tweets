@@ -364,6 +364,11 @@ document.getElementById('downloadCsv').addEventListener('click', () => {
 
 async function downloadTweets(format) {
     try {
+        if (!currentTweets || currentTweets.length === 0) {
+            alert('No tweets available to download. Please scrape tweets first.');
+            return;
+        }
+        
         const response = await fetch('/api/download', {
             method: 'POST',
             headers: {
@@ -376,19 +381,35 @@ async function downloadTweets(format) {
         });
         
         if (!response.ok) {
-            throw new Error('Download failed');
+            const errorData = await response.json().catch(() => ({ error: 'Download failed' }));
+            throw new Error(errorData.error || 'Download failed');
         }
         
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || `tweets.${format}`;
+        
+        // Extract filename from Content-Disposition header or use default
+        const contentDisposition = response.headers.get('Content-Disposition');
+        let filename = `tweets.${format}`;
+        if (contentDisposition) {
+            const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+            if (filenameMatch && filenameMatch[1]) {
+                filename = filenameMatch[1].replace(/['"]/g, '');
+            }
+        }
+        
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         window.URL.revokeObjectURL(url);
         document.body.removeChild(a);
+        
+        // Show success message
+        console.log(`Successfully downloaded ${currentTweets.length} tweets as ${format.toUpperCase()}`);
     } catch (error) {
+        console.error('Download error:', error);
         alert('Failed to download tweets: ' + error.message);
     }
 }
