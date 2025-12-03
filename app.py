@@ -607,18 +607,21 @@ def download_tweets():
                 as_attachment=True,
                 download_name=f'tweets_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
             )
-    
-    else:  # JSON
-        output = io.BytesIO()
-        json_data = json.dumps(tweets, indent=2, ensure_ascii=False)
-        output.write(json_data.encode('utf-8'))
-        output.seek(0)
-        return send_file(
-            output,
-            mimetype='application/json',
-            as_attachment=True,
-            download_name=f'tweets_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
-        )
+        
+        else:  # JSON
+            output = io.BytesIO()
+            json_data = json.dumps(tweets, indent=2, ensure_ascii=False)
+            output.write(json_data.encode('utf-8'))
+            output.seek(0)
+            return send_file(
+                output,
+                mimetype='application/json',
+                as_attachment=True,
+                download_name=f'tweets_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+            )
+    except Exception as e:
+        logger.error(f"Error in download_tweets: {e}")
+        return jsonify({'error': f'Download failed: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
