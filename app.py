@@ -155,13 +155,14 @@ def scrape_tweets():
         exclude_quotes=exclude_quotes
     )
     
-    if result['success']:
+    if result.get('success'):
+        tweets = result.get('tweets', [])
         return jsonify({
-            'tweets': result['tweets'],
-            'count': result['count'],
+            'tweets': tweets,
+            'count': len(tweets),
             'username': username,
-            'scraper_used': result['scraper_used'],
-            'total_before_filter': result.get('total_before_filter', result['count']),
+            'scraper_used': result.get('scraper_used', 'unknown'),
+            'total_before_filter': result.get('total_before_filter', len(tweets)),
             'rate_limit_status': rate_limiter.get_status()
         })
     else:
