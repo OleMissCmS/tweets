@@ -47,18 +47,24 @@ class TwitterAPIScraper(TweetScraper):
             access_token = os.getenv('TWITTER_ACCESS_TOKEN', '').strip()
             access_token_secret = os.getenv('TWITTER_ACCESS_TOKEN_SECRET', '').strip()
             
-            # Also check for Bearer Token as fallback
+            # Check for Bearer Token (OAuth 2.0 App-only)
             bearer_token = os.getenv('TWITTER_BEARER_TOKEN', '').strip()
             
-            # Available if we have OAuth 1.0a OR Bearer Token
-            return bool((api_key and api_secret and access_token and access_token_secret) or bearer_token)
+            # Check for OAuth 2.0 Client ID/Secret (for future user context features)
+            client_id = os.getenv('TWITTER_CLIENT_ID', '').strip()
+            client_secret = os.getenv('TWITTER_CLIENT_SECRET', '').strip()
+            
+            # Available if we have OAuth 1.0a OR Bearer Token OR OAuth 2.0 Client credentials
+            return bool((api_key and api_secret and access_token and access_token_secret) or 
+                       bearer_token or 
+                       (client_id and client_secret))
         except ImportError:
             return False
     
     def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000):
         from xdk import Client
         
-        # Try OAuth 1.0a first (preferred for xdk-python)
+        # Authentication priority: OAuth 1.0a > Bearer Token > OAuth 2.0 Client ID/Secret
         api_key = os.getenv('TWITTER_API_KEY', '').strip()
         api_secret = os.getenv('TWITTER_API_SECRET', '').strip()
         access_token = os.getenv('TWITTER_ACCESS_TOKEN', '').strip()
@@ -66,7 +72,10 @@ class TwitterAPIScraper(TweetScraper):
         
         bearer_token = os.getenv('TWITTER_BEARER_TOKEN', '').strip()
         
-        # Initialize client - try OAuth 1.0a first, then Bearer Token
+        client_id = os.getenv('TWITTER_CLIENT_ID', '').strip()
+        client_secret = os.getenv('TWITTER_CLIENT_SECRET', '').strip()
+        
+        # Initialize client - try OAuth 1.0a first, then Bearer Token, then OAuth 2.0
         try:
             if api_key and api_secret and access_token and access_token_secret:
                 logger.info("Using OAuth 1.0a authentication with xdk")
@@ -89,10 +98,28 @@ class TwitterAPIScraper(TweetScraper):
                         access_token_secret=access_token_secret
                     )
             elif bearer_token:
-                logger.info("Using Bearer Token authentication with xdk")
+                logger.info("Using Bearer Token authentication (OAuth 2.0 App-only) with xdk")
                 client = Client(bearer_token=bearer_token)
+            elif client_id and client_secret:
+                logger.info("Using OAuth 2.0 Client ID/Secret authentication with xdk")
+                # Note: OAuth 2.0 Client ID/Secret typically requires PKCE flow for user context
+                # For app-only operations, Bearer Token is preferred
+                # This is here for future user context features
+                try:
+                    from xdk.auth import OAuth2ClientCredentials
+                    auth = OAuth2ClientCredentials(
+                        client_id=client_id,
+                        client_secret=client_secret
+                    )
+                    client = Client(auth=auth)
+                except ImportError:
+                    # Fallback: try direct initialization
+                    client = Client(
+                        client_id=client_id,
+                        client_secret=client_secret
+                    )
             else:
-                raise Exception("Twitter API credentials not configured. Set TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, and TWITTER_ACCESS_TOKEN_SECRET.")
+                raise Exception("Twitter API credentials not configured. Set TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, and TWITTER_ACCESS_TOKEN_SECRET (or TWITTER_BEARER_TOKEN, or TWITTER_CLIENT_ID and TWITTER_CLIENT_SECRET).")
         except Exception as e:
             logger.error(f"Failed to initialize xdk client: {e}")
             raise Exception(f"Failed to initialize Twitter API client: {e}")

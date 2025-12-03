@@ -125,6 +125,34 @@ def scrape_tweets():
             'available_scrapers': available_scrapers
         }), 500
 
+@app.route('/callback')
+def oauth_callback():
+    """OAuth 2.0 callback handler - required by X but not actively used for read-only scraping"""
+    # For read-only scraping with Bearer Token, this isn't actively used
+    # But X requires it to be configured, so we provide a simple handler
+    code = request.args.get('code')
+    error = request.args.get('error')
+    
+    if error:
+        return jsonify({
+            'error': f'OAuth error: {error}',
+            'message': 'OAuth callback received an error. For read-only scraping, Bearer Token is used instead.'
+        }), 400
+    
+    if code:
+        # If you implement OAuth 2.0 PKCE flow in the future, handle the code here
+        return jsonify({
+            'message': 'OAuth callback received. For read-only scraping, Bearer Token authentication is used.',
+            'note': 'This endpoint is configured but not actively used for current read-only operations.',
+            'code': code[:10] + '...' if code else None  # Show partial code for debugging (don't expose full code)
+        })
+    
+    return jsonify({
+        'message': 'OAuth callback endpoint is configured and ready.',
+        'status': 'ok',
+        'note': 'This endpoint is required by X Developer Portal configuration but is not actively used for read-only scraping operations.'
+    })
+
 @app.route('/api/test-twikit', methods=['GET'])
 def test_twikit():
     """Test Twikit authentication - useful for debugging credentials"""
