@@ -92,6 +92,7 @@ class TwitterAPIScraper(TweetScraper):
                     if not response.data:
                         break  # No more tweets
                     
+                    hit_date_limit = False
                     for tweet in response.data:
                         # Date filtering
                         tweet_date = tweet.created_at
@@ -108,8 +109,7 @@ class TwitterAPIScraper(TweetScraper):
                             continue
                         if end_date and tweet_date > end_date:
                             # Since tweets are in reverse chronological order, we've gone past the end date
-                            # Set flag to break outer loop
-                            next_token = None
+                            hit_date_limit = True
                             break
                         
                         # Determine tweet type
@@ -149,10 +149,11 @@ class TwitterAPIScraper(TweetScraper):
                         if tweet_count >= max_tweets:
                             break
                     
-                    # Check for next page (only if we didn't hit date limit)
-                    if next_token is None:
-                        break  # Hit date limit or no more tweets
+                    # If we hit date limit, stop paginating
+                    if hit_date_limit:
+                        break
                     
+                    # Check for next page
                     if hasattr(response, 'meta') and response.meta and 'next_token' in response.meta:
                         next_token = response.meta['next_token']
                     else:
