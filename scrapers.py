@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Optional
 import datetime
 import logging
+import os
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +145,12 @@ class ScweetScraper(TweetScraper):
 
 
 class TweeterPyScraper(TweetScraper):
-    """TweeterPy implementation - alternative scraper"""
+    """TweeterPy implementation - alternative scraper
+    
+    Note: TweeterPy has strict beautifulsoup4 dependency (4.12.2) that conflicts
+    with Scweet (4.12.3). This scraper may not be available if there are
+    dependency conflicts.
+    """
     
     def get_name(self) -> str:
         return "TweeterPy"
@@ -152,7 +159,8 @@ class TweeterPyScraper(TweetScraper):
         try:
             from tweeterpy import TweeterPy
             return True
-        except ImportError:
+        except (ImportError, Exception) as e:
+            logger.debug(f"TweeterPy not available: {e}")
             return False
     
     def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000):
@@ -197,22 +205,149 @@ class TweeterPyScraper(TweetScraper):
 
 
 class TwikitScraper(TweetScraper):
-    """Twikit implementation - alternative scraper"""
+    """Twikit implementation - requires authentication"""
+    
+    def __init__(self):
+        self.client = None
+        self.cookies_file = 'twikit_cookies.json'
+        self._initialized = False
     
     def get_name(self) -> str:
         return "Twikit"
     
     def is_available(self) -> bool:
         try:
-            import twikit
-            return True
+            from twikit import Client
+            # Check if credentials are available
+            return bool(os.getenv('TWITTER_USERNAME') and 
+                      os.getenv('TWITTER_EMAIL') and 
+                      os.getenv('TWITTER_PASSWORD'))
         except ImportError:
             return False
     
+    async def _ensure_authenticated(self):
+        """Ensure client is authenticated"""
+        if self._initialized and self.client:
+            return
+        
+        from twikit import Client
+        import json
+        
+        self.client = Client('en-US')
+        
+        # Try to load cookies first
+        if os.path.exists(self.cookies_file):
+            try:
+                import aiofiles
+                async with aiofiles.open(self.cookies_file, 'r') as f:
+                    cookies = json.loads(await f.read())
+                    self.client.set_cookies(cookies)
+                    # Test if cookies are still valid
+                    try:
+                        await self.client.get_user_by_screen_name('twitter')
+                        self._initialized = True
+                        logger.info("Twikit: Loaded valid cookies")
+                        return
+                    except Exception as e:
+                        logger.warning(f"Twikit: Cookies expired, re-authenticating: {e}")
+                        # Cookies expired, need to re-authenticate
+                        pass
+            except Exception as e:
+                logger.warning(f"Twikit: Failed to load cookies: {e}")
+        
+        # Authenticate with credentials
+        username = os.getenv('TWITTER_USERNAME')
+        email = os.getenv('TWITTER_EMAIL')
+        password = os.getenv('TWITTER_PASSWORD')
+        
+        if not all([username, email, password]):
+            raise Exception("Twikit credentials not configured. Set TWITTER_USERNAME, TWITTER_EMAIL, and TWITTER_PASSWORD environment variables.")
+        
+        logger.info("Twikit: Authenticating with credentials...")
+        await self.client.login(
+            auth_info_1=username,
+            auth_info_2=email,
+            password=password
+        )
+        
+        # Save cookies for future use
+        try:
+            import aiofiles
+            cookies = self.client.get_cookies()
+            async with aiofiles.open(self.cookies_file, 'w') as f:
+                await f.write(json.dumps(cookies))
+            logger.info("Twikit: Saved cookies for future use")
+        except Exception as e:
+            logger.warning(f"Twikit: Failed to save cookies: {e}")
+        
+        self._initialized = True
+    
+    async def _scrape_async(self, username: str, start_date=None, end_date=None, max_tweets=1000):
+        """Async scraping method"""
+        await self._ensure_authenticated()
+        
+        tweets = []
+        count = 0
+        
+        try:
+            # Get user first
+            user = await self.client.get_user_by_screen_name(username)
+            
+            # Get user tweets - Twikit uses get_user_tweets method
+            user_tweets = await user.get_tweets(count=max_tweets)
+            
+            for tweet in user_tweets:
+                # Date filtering
+                tweet_date = tweet.created_at
+                if isinstance(tweet_date, str):
+                    try:
+                        tweet_date = datetime.datetime.fromisoformat(tweet_date.replace('Z', '+00:00'))
+                    except:
+                        tweet_date = datetime.datetime.now(datetime.timezone.utc)
+                elif not isinstance(tweet_date, datetime.datetime):
+                    tweet_date = datetime.datetime.now(datetime.timezone.utc)
+                
+                if start_date and tweet_date < start_date:
+                    continue
+                if end_date and tweet_date > end_date:
+                    break
+                
+                tweets.append({
+                    'id': str(tweet.id),
+                    'url': f"https://twitter.com/{username}/status/{tweet.id}",
+                    'date': tweet_date.isoformat() if hasattr(tweet_date, 'isoformat') else str(tweet_date),
+                    'content': getattr(tweet, 'text', None) or getattr(tweet, 'full_text', '') or '',
+                    'user': username,
+                    'reply_count': getattr(tweet, 'reply_count', 0) or 0,
+                    'retweet_count': getattr(tweet, 'retweet_count', 0) or 0,
+                    'like_count': getattr(tweet, 'favorite_count', None) or getattr(tweet, 'like_count', 0) or 0,
+                    'quote_count': getattr(tweet, 'quote_count', 0) or 0,
+                    'is_retweet': getattr(tweet, 'is_retweet', False) or False,
+                    'is_reply': bool(getattr(tweet, 'in_reply_to_status_id', None)),
+                    'is_quote': bool(getattr(tweet, 'quoted_status_id', None)),
+                })
+                
+                count += 1
+                if count >= max_tweets:
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Twikit scraping error: {e}")
+            raise
+        
+        return tweets
+    
     def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000):
-        # Twikit requires authentication, so this is a placeholder
-        # You'd need to implement actual Twikit scraping logic with auth
-        raise NotImplementedError("Twikit requires authentication setup")
+        """Synchronous wrapper for async scraping"""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        return loop.run_until_complete(
+            self._scrape_async(username, start_date, end_date, max_tweets)
+        )
 
 
 class ScraperManager:
@@ -228,7 +363,7 @@ class ScraperManager:
             SnscrapeScraper,  # Primary - most reliable
             ScweetScraper,    # Alternative 1
             TweeterPyScraper, # Alternative 2
-            # TwikitScraper,  # Requires auth - commented out for now
+            TwikitScraper,    # Alternative 3 - requires auth
         ]
         
         for scraper_class in scraper_classes:
