@@ -3,8 +3,8 @@ Flask==3.0.0
 git+https://github.com/JustAnotherArchivist/snscrape.git
 # Alternative scrapers
 git+https://github.com/Altimis/Scweet.git
-git+https://github.com/iSarabjitDhiman/TweeterPy.git
-git+https://github.com/d60/twikit.git  # Requires auth setup
+# git+https://github.com/iSarabjitDhiman/TweeterPy.git  # Commented out due to beautifulsoup4 conflict (requires 4.12.2 vs Scweet's 4.12.3)
+git+https://github.com/d60/twikit.git  # Requires auth setup (TWITTER_USERNAME, TWITTER_EMAIL, TWITTER_PASSWORD)
 # Fix dependency conflict - pin beautifulsoup4 to version compatible with Scweet
 beautifulsoup4==4.12.3
 requests==2.31.0
