@@ -93,8 +93,13 @@ class ScweetScraper(TweetScraper):
     def is_available(self) -> bool:
         try:
             from Scweet.scweet import scrape
+            logger.info("Scweet: Successfully imported")
             return True
-        except ImportError:
+        except ImportError as e:
+            logger.warning(f"Scweet: Import failed: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Scweet: Unexpected error: {e}")
             return False
     
     def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000):
@@ -226,7 +231,7 @@ class TwikitScraper(TweetScraper):
             return False
     
     async def _ensure_authenticated(self):
-        """Ensure client is authenticated"""
+        """Ensure client is authenticated with improved error handling"""
         if self._initialized and self.client:
             return
         
@@ -256,19 +261,45 @@ class TwikitScraper(TweetScraper):
                 logger.warning(f"Twikit: Failed to load cookies: {e}")
         
         # Authenticate with credentials
-        username = os.getenv('TWITTER_USERNAME')
-        email = os.getenv('TWITTER_EMAIL')
-        password = os.getenv('TWITTER_PASSWORD')
+        username = os.getenv('TWITTER_USERNAME', '').strip()
+        email = os.getenv('TWITTER_EMAIL', '').strip()
+        password = os.getenv('TWITTER_PASSWORD', '').strip()
         
         if not all([username, email, password]):
             raise Exception("Twikit credentials not configured. Set TWITTER_USERNAME, TWITTER_EMAIL, and TWITTER_PASSWORD environment variables.")
         
         logger.info("Twikit: Authenticating with credentials...")
-        await self.client.login(
-            auth_info_1=username,
-            auth_info_2=email,
-            password=password
-        )
+        
+        # Try primary authentication method
+        try:
+            await self.client.login(
+                auth_info_1=username,  # Username
+                auth_info_2=email,      # Email
+                password=password
+            )
+            logger.info("Twikit: Authentication successful")
+        except Exception as e:
+            error_msg = str(e)
+            logger.warning(f"Twikit: Standard auth failed: {error_msg}")
+            
+            # Try alternative authentication methods
+            try:
+                # Some Twikit versions might use different parameter names
+                await self.client.login(
+                    username=username,
+                    email=email,
+                    password=password
+                )
+                logger.info("Twikit: Authentication successful (alternative method)")
+            except Exception as e2:
+                # Provide helpful error message
+                if '401' in error_msg or 'authenticate' in error_msg.lower():
+                    raise Exception(
+                        f"Twikit authentication failed (401): Check your credentials. "
+                        f"Ensure 2FA is disabled or use an app password. Error: {e2}"
+                    )
+                else:
+                    raise Exception(f"Twikit authentication failed: {e2}")
         
         # Save cookies for future use
         try:
@@ -383,54 +414,81 @@ class ScraperManager:
     
     def scrape_with_fallback(self, username: str, start_date=None, end_date=None, 
                            max_tweets=1000, exclude_retweets=False, 
-                           exclude_replies=False, exclude_quotes=False):
-        """Try each scraper in sequence until one succeeds"""
+                           exclude_replies=False, exclude_quotes=False,
+                           max_retries=2):
+        """Try each scraper in sequence with retry logic until one succeeds"""
+        import time
         
         errors = []
         
         for scraper in self.scrapers:
-            try:
-                logger.info(f"Trying scraper: {scraper.get_name()}")
-                tweets = scraper.scrape_user_tweets(
-                    username, start_date, end_date, max_tweets
-                )
-                
-                if not tweets:
-                    errors.append(f"{scraper.get_name()}: No tweets returned")
-                    continue
-                
-                # Apply filters
-                filtered_tweets = []
-                for tweet in tweets:
-                    if exclude_retweets and tweet.get('is_retweet'):
-                        continue
-                    if exclude_replies and tweet.get('is_reply'):
-                        continue
-                    if exclude_quotes and tweet.get('is_quote'):
-                        continue
-                    filtered_tweets.append(tweet)
-                
-                logger.info(f"Scraper {scraper.get_name()} succeeded with {len(filtered_tweets)} tweets")
-                return {
-                    'success': True,
-                    'tweets': filtered_tweets,
-                    'scraper_used': scraper.get_name(),
-                    'count': len(filtered_tweets),
-                    'total_before_filter': len(tweets)
-                }
-                
-            except Exception as e:
-                error_msg = f"{scraper.get_name()}: {str(e)}"
-                errors.append(error_msg)
-                logger.warning(f"Scraper {scraper.get_name()} failed: {error_msg}")
-                continue
+            scraper_name = scraper.get_name()
+            
+            # Try scraper with retries
+            for attempt in range(max_retries + 1):
+                try:
+                    if attempt > 0:
+                        wait_time = 2 ** attempt  # Exponential backoff: 2s, 4s
+                        logger.info(f"Retrying {scraper_name} (attempt {attempt + 1}/{max_retries + 1}) after {wait_time}s")
+                        time.sleep(wait_time)
+                    
+                    logger.info(f"Trying scraper: {scraper_name} (attempt {attempt + 1}/{max_retries + 1})")
+                    tweets = scraper.scrape_user_tweets(
+                        username, start_date, end_date, max_tweets
+                    )
+                    
+                    if not tweets:
+                        error_msg = f"{scraper_name}: No tweets returned"
+                        errors.append(error_msg)
+                        logger.warning(error_msg)
+                        if attempt < max_retries:
+                            continue  # Retry
+                        break  # Move to next scraper
+                    
+                    # Apply filters
+                    filtered_tweets = []
+                    for tweet in tweets:
+                        if exclude_retweets and tweet.get('is_retweet'):
+                            continue
+                        if exclude_replies and tweet.get('is_reply'):
+                            continue
+                        if exclude_quotes and tweet.get('is_quote'):
+                            continue
+                        filtered_tweets.append(tweet)
+                    
+                    logger.info(f"Scraper {scraper_name} succeeded with {len(filtered_tweets)} tweets (after {attempt + 1} attempt(s))")
+                    return {
+                        'success': True,
+                        'tweets': filtered_tweets,
+                        'scraper_used': scraper_name,
+                        'count': len(filtered_tweets),
+                        'total_before_filter': len(tweets),
+                        'attempts': attempt + 1
+                    }
+                    
+                except Exception as e:
+                    error_msg = f"{scraper_name}: {str(e)}"
+                    logger.warning(f"Scraper {scraper_name} failed (attempt {attempt + 1}): {error_msg}")
+                    
+                    # Don't retry on certain errors (auth failures, etc.)
+                    if any(keyword in error_msg.lower() for keyword in ['401', 'authenticate', 'credentials', 'not configured']):
+                        errors.append(f"{error_msg} (not retrying)")
+                        break  # Move to next scraper
+                    
+                    if attempt < max_retries:
+                        errors.append(f"{error_msg} (will retry)")
+                        continue  # Retry
+                    else:
+                        errors.append(error_msg)
+                        break  # Move to next scraper
         
         # All scrapers failed
-        logger.error(f"All scrapers failed for username: {username}")
+        logger.error(f"All scrapers failed for username: {username} after {max_retries + 1} attempts each")
         return {
             'success': False,
             'error': 'All scrapers failed to retrieve tweets',
             'errors': errors,
-            'available_scrapers': self.get_available_scrapers()
+            'available_scrapers': self.get_available_scrapers(),
+            'attempts_per_scraper': max_retries + 1
         }
 

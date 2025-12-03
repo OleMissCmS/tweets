@@ -3,6 +3,7 @@ import datetime
 import json
 import csv
 import io
+import os
 from functools import wraps
 import logging
 from scrapers import ScraperManager
@@ -104,21 +105,88 @@ def scrape_tweets():
         available_scrapers = result.get('available_scrapers', [])
         
         error_message = 'All scrapers failed to retrieve tweets.\n\n'
-        error_message += f'Tried {len(error_details)} scraper(s): {", ".join(available_scrapers)}\n\n'
+        error_message += f'Tried {len(available_scrapers)} scraper(s): {", ".join(available_scrapers)}\n'
+        error_message += f'Total attempts: {len(error_details)} (with retries)\n\n'
         error_message += 'Possible reasons:\n'
         error_message += '- Twitter is blocking automated requests\n'
         error_message += '- The account may be private or suspended\n'
         error_message += '- Rate limiting from Twitter\n'
-        error_message += '- Network connectivity issues\n\n'
+        error_message += '- Network connectivity issues\n'
+        error_message += '- Authentication issues (for Twikit)\n\n'
         error_message += 'Please try again in a few minutes or try a different username.'
+        error_message += '\n\nTip: Visit /api/test-twikit to test Twikit authentication.'
         
         if error_details:
-            error_message += '\n\nTechnical details:\n' + '\n'.join(error_details[:3])  # Show first 3 errors
+            error_message += '\n\nTechnical details:\n' + '\n'.join(error_details[:5])  # Show first 5 errors
         
         return jsonify({
             'error': error_message,
             'errors': error_details,
             'available_scrapers': available_scrapers
+        }), 500
+
+@app.route('/api/test-twikit', methods=['GET'])
+def test_twikit():
+    """Test Twikit authentication - useful for debugging credentials"""
+    try:
+        from scrapers import TwikitScraper
+        import asyncio
+        
+        scraper = TwikitScraper()
+        
+        if not scraper.is_available():
+            return jsonify({
+                'status': 'error',
+                'message': 'Twikit not available - check that credentials are set in environment variables',
+                'credentials_check': {
+                    'TWITTER_USERNAME': bool(os.getenv('TWITTER_USERNAME')),
+                    'TWITTER_EMAIL': bool(os.getenv('TWITTER_EMAIL')),
+                    'TWITTER_PASSWORD': bool(os.getenv('TWITTER_PASSWORD'))
+                }
+            }), 400
+        
+        # Try to authenticate
+        async def test_auth():
+            await scraper._ensure_authenticated()
+            # Test by getting a user
+            test_user = await scraper.client.get_user_by_screen_name('twitter')
+            return {
+                'username': test_user.screen_name,
+                'name': test_user.name
+            }
+        
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            test_user = loop.run_until_complete(test_auth())
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'Twikit authentication successful',
+                'test_user': test_user
+            })
+        except Exception as e:
+            error_msg = str(e)
+            return jsonify({
+                'status': 'error',
+                'message': f'Twikit authentication failed: {error_msg}',
+                'hints': [
+                    'Check that TWITTER_USERNAME, TWITTER_EMAIL, and TWITTER_PASSWORD are correct',
+                    'Ensure 2FA is disabled or use an app password',
+                    'Verify your account is not locked or suspended',
+                    'Check Render logs for more detailed error information'
+                ]
+            }), 500
+            
+    except ImportError:
+        return jsonify({
+            'status': 'error',
+            'message': 'Twikit library not installed'
+        }), 500
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Unexpected error: {str(e)}'
         }), 500
 
 @app.route('/api/download', methods=['POST'])
