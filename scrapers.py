@@ -341,6 +341,9 @@ class TwitterAPIScraper(TweetScraper):
                             break  # No more pages
                     else:
                         break  # No more pages
+                    
+                    # Store next_token for pagination resumption (would need to be returned)
+                    # For now, we'll use last_tweet_id for resumption
                         
                 except Exception as e:
                     error_msg = str(e)

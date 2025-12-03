@@ -3,6 +3,18 @@ let currentRequestId = null;
 
 // Load queue and rate limit status on page load
 document.addEventListener('DOMContentLoaded', async () => {
+    // Set default end date to today
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('end_date').value = today;
+    document.getElementById('end_date').max = today;
+    
+    // Set max date for start_date (7 days back for FREE tier)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const minDate = sevenDaysAgo.toISOString().split('T')[0];
+    document.getElementById('start_date').min = minDate;
+    document.getElementById('start_date').max = today;
+    
     await loadQueue();
     await updateRateLimitStatus();
     // Update rate limit status every 30 seconds
@@ -310,7 +322,7 @@ function displayResults(tweets, count, username, scraperUsed) {
                 <span>🔁 ${tweet.quote_count.toLocaleString()}</span>
             </div>
             <div style="margin-top: 10px;">
-                <a href="${tweet.url}" target="_blank" style="color: #1da1f2; text-decoration: none; font-size: 0.9em;">View on Twitter →</a>
+                <a href="${tweet.url}" target="_blank" style="color: #C41230; text-decoration: none; font-size: 0.9em;">View on Twitter →</a>
             </div>
         `;
         

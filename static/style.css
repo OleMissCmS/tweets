@@ -6,7 +6,7 @@
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, #C41230 0%, #13294B 100%);
     min-height: 100vh;
     padding: 20px;
     color: #333;
@@ -22,7 +22,7 @@ body {
 }
 
 header {
-    background: linear-gradient(135deg, #1da1f2 0%, #0d8bd9 100%);
+    background: linear-gradient(135deg, #C41230 0%, #13294B 100%);
     color: white;
     padding: 30px;
     text-align: center;
@@ -64,9 +64,10 @@ main {
 }
 
 .form-group input[type="text"]:focus,
-.form-group input[type="date"]:focus {
+.form-group input[type="date"]:focus,
+.form-group input[type="number"]:focus {
     outline: none;
-    border-color: #1da1f2;
+    border-color: #C41230;
 }
 
 .date-range {
@@ -128,7 +129,7 @@ main {
 }
 
 .btn-primary {
-    background: linear-gradient(135deg, #1da1f2 0%, #0d8bd9 100%);
+    background: linear-gradient(135deg, #C41230 0%, #13294B 100%);
     color: white;
     width: 100%;
     justify-content: center;
@@ -136,7 +137,7 @@ main {
 
 .btn-primary:hover:not(:disabled) {
     transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(29, 161, 242, 0.4);
+    box-shadow: 0 5px 15px rgba(196, 18, 48, 0.4);
 }
 
 .btn-primary:disabled {
@@ -196,7 +197,7 @@ main {
 
 .tweet-card {
     background: #f8f9fa;
-    border-left: 4px solid #1da1f2;
+    border-left: 4px solid #C41230;
     padding: 20px;
     margin-bottom: 15px;
     border-radius: 8px;
@@ -219,7 +220,7 @@ main {
 
 .tweet-user {
     font-weight: 600;
-    color: #1da1f2;
+    color: #C41230;
 }
 
 .tweet-date {
@@ -353,7 +354,7 @@ footer {
 
 .queue-item-username {
     font-weight: 600;
-    color: #1da1f2;
+    color: #C41230;
     margin-bottom: 5px;
 }
 
@@ -401,6 +402,6 @@ footer {
 
 .form-group input[type="number"]:focus {
     outline: none;
-    border-color: #1da1f2;
+    border-color: #C41230;
 }
 

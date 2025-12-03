@@ -54,7 +54,14 @@ def index():
 @handle_rate_limit
 def scrape_tweets():
     """API endpoint to scrape tweets with rate limit checking and queuing"""
-    data = request.json
+    try:
+        if not request.json:
+            return jsonify({'error': 'Request body is required'}), 400
+        
+        data = request.json
+    except Exception as e:
+        logger.error(f"Error parsing request JSON: {e}")
+        return jsonify({'error': 'Invalid request format'}), 400
     
     # Check if this is a resume request
     request_id = data.get('request_id')
@@ -76,10 +83,21 @@ def scrape_tweets():
     start_datetime = None
     end_datetime = None
     
+    # Default end date to today if not provided
+    if not end_date:
+        end_date = datetime.datetime.now().strftime('%Y-%m-%d')
+    
     if start_date:
         try:
             start_datetime = datetime.datetime.strptime(start_date, '%Y-%m-%d')
             start_datetime = start_datetime.replace(tzinfo=datetime.timezone.utc)
+            
+            # For FREE tier, limit to 7 days back
+            seven_days_ago = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)
+            if start_datetime < seven_days_ago:
+                return jsonify({
+                    'error': f'Free tier can only access tweets from the past 7 days. Earliest date: {seven_days_ago.strftime("%Y-%m-%d")}'
+                }), 400
         except ValueError:
             return jsonify({'error': 'Invalid start date format. Use YYYY-MM-DD'}), 400
     
@@ -88,6 +106,11 @@ def scrape_tweets():
             end_datetime = datetime.datetime.strptime(end_date, '%Y-%m-%d')
             # Set to end of day
             end_datetime = end_datetime.replace(hour=23, minute=59, second=59, tzinfo=datetime.timezone.utc)
+            
+            # Can't go into the future
+            now = datetime.datetime.now(datetime.timezone.utc)
+            if end_datetime > now:
+                end_datetime = now
         except ValueError:
             return jsonify({'error': 'Invalid end date format. Use YYYY-MM-DD'}), 400
     
