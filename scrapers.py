@@ -53,11 +53,13 @@ class TwitterAPIScraper(TweetScraper):
             # Check for OAuth 2.0 Client ID/Secret (for future user context features)
             client_id = os.getenv('TWITTER_CLIENT_ID', '').strip()
             client_secret = os.getenv('TWITTER_CLIENT_SECRET', '').strip()
+            client_oauth2_secret = os.getenv('TWITTER_CLIENT_OAUTH2', '').strip()
             
             # Available if we have OAuth 1.0a OR Bearer Token OR OAuth 2.0 Client credentials
             return bool((api_key and api_secret and access_token and access_token_secret) or 
                        bearer_token or 
-                       (client_id and client_secret))
+                       (client_id and client_secret) or
+                       (client_id and client_oauth2_secret))
         except ImportError:
             return False
     
@@ -74,6 +76,7 @@ class TwitterAPIScraper(TweetScraper):
         
         client_id = os.getenv('TWITTER_CLIENT_ID', '').strip()
         client_secret = os.getenv('TWITTER_CLIENT_SECRET', '').strip()
+        client_oauth2_secret = os.getenv('TWITTER_CLIENT_OAUTH2', '').strip()
         
         # Initialize client - try OAuth 1.0a first, then Bearer Token, then OAuth 2.0
         try:
@@ -100,8 +103,10 @@ class TwitterAPIScraper(TweetScraper):
             elif bearer_token:
                 logger.info("Using Bearer Token authentication (OAuth 2.0 App-only) with xdk")
                 client = Client(bearer_token=bearer_token)
-            elif client_id and client_secret:
+            elif client_id and (client_secret or client_oauth2_secret):
                 logger.info("Using OAuth 2.0 Client ID/Secret authentication with xdk")
+                # Use OAuth 2.0 secret if available, otherwise fall back to regular client secret
+                oauth2_secret = client_oauth2_secret if client_oauth2_secret else client_secret
                 # Note: OAuth 2.0 Client ID/Secret typically requires PKCE flow for user context
                 # For app-only operations, Bearer Token is preferred
                 # This is here for future user context features
@@ -109,17 +114,17 @@ class TwitterAPIScraper(TweetScraper):
                     from xdk.auth import OAuth2ClientCredentials
                     auth = OAuth2ClientCredentials(
                         client_id=client_id,
-                        client_secret=client_secret
+                        client_secret=oauth2_secret
                     )
                     client = Client(auth=auth)
                 except ImportError:
                     # Fallback: try direct initialization
                     client = Client(
                         client_id=client_id,
-                        client_secret=client_secret
+                        client_secret=oauth2_secret
                     )
             else:
-                raise Exception("Twitter API credentials not configured. Set TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, and TWITTER_ACCESS_TOKEN_SECRET (or TWITTER_BEARER_TOKEN, or TWITTER_CLIENT_ID and TWITTER_CLIENT_SECRET).")
+                raise Exception("Twitter API credentials not configured. Set TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, and TWITTER_ACCESS_TOKEN_SECRET (or TWITTER_BEARER_TOKEN, or TWITTER_CLIENT_ID with TWITTER_CLIENT_SECRET/TWITTER_CLIENT_OAUTH2).")
         except Exception as e:
             logger.error(f"Failed to initialize xdk client: {e}")
             raise Exception(f"Failed to initialize Twitter API client: {e}")
