@@ -107,7 +107,9 @@ class TwitterAPIScraper(TweetScraper):
                         if start_date and tweet_date < start_date:
                             continue
                         if end_date and tweet_date > end_date:
-                            # Since tweets are in reverse chronological order, we can break
+                            # Since tweets are in reverse chronological order, we've gone past the end date
+                            # Set flag to break outer loop
+                            next_token = None
                             break
                         
                         # Determine tweet type
@@ -147,15 +149,14 @@ class TwitterAPIScraper(TweetScraper):
                         if tweet_count >= max_tweets:
                             break
                     
-                    # Check for next page
+                    # Check for next page (only if we didn't hit date limit)
+                    if next_token is None:
+                        break  # Hit date limit or no more tweets
+                    
                     if hasattr(response, 'meta') and response.meta and 'next_token' in response.meta:
                         next_token = response.meta['next_token']
                     else:
                         break  # No more pages
-                    
-                    # If we hit the date limit, break
-                    if end_date and tweet_date and tweet_date < end_date:
-                        break
                         
                 except tweepy.TooManyRequests:
                     logger.warning("Twitter API: Rate limit hit, waiting...")
