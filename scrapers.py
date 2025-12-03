@@ -18,7 +18,10 @@ class TweetScraper(ABC):
     @abstractmethod
     def scrape_user_tweets(self, username: str, start_date: Optional[datetime.datetime] = None, 
                           end_date: Optional[datetime.datetime] = None, 
-                          max_tweets: int = 1000) -> List[Dict]:
+                          max_tweets: int = 1000,
+                          resume_from_token: Optional[str] = None,
+                          resume_from_tweet_id: Optional[str] = None,
+                          collected_count: int = 0) -> List[Dict]:
         """Scrape tweets for a user. Returns list of tweet dicts."""
         pass
     
@@ -176,8 +179,9 @@ class TwitterAPIScraper(TweetScraper):
                 raise Exception(f"Unable to get user '{username}': {e}")
             
             tweets = []
-            next_token = None
-            tweet_count = 0
+            # Resume from pagination token if provided
+            next_token = resume_from_token
+            tweet_count = collected_count  # Start from already collected count
             
             # Paginate through tweets
             while tweet_count < max_tweets:
@@ -295,6 +299,12 @@ class TwitterAPIScraper(TweetScraper):
                         tweet_id = str(tweet.id if hasattr(tweet, 'id') else tweet.get('id', ''))
                         tweet_text = tweet.text if hasattr(tweet, 'text') else tweet.get('text', '')
                         
+                        # Skip if we're resuming and this tweet was already collected
+                        if resume_from_tweet_id and tweet_id == resume_from_tweet_id:
+                            # Found the resume point, continue from next tweet
+                            resume_from_tweet_id = None
+                            continue
+                        
                         tweets.append({
                             'id': tweet_id,
                             'url': f"https://twitter.com/{username}/status/{tweet_id}",
@@ -365,14 +375,20 @@ class SnscrapeScraper(TweetScraper):
         except ImportError:
             return False
     
-    def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000):
+    def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000,
+                          resume_from_token=None, resume_from_tweet_id=None, collected_count=0):
         from snscrape.modules.twitter import TwitterUserScraper
+        # Note: snscrape doesn't support pagination tokens, but we can skip already collected tweets
         
         tweets = []
         scraper = TwitterUserScraper(username)
-        count = 0
+        count = collected_count  # Start from collected count
         
         for tweet in scraper.get_items():
+            # Skip if resuming and we've seen this tweet
+            if resume_from_tweet_id and str(tweet.id) == resume_from_tweet_id:
+                resume_from_tweet_id = None  # Found resume point
+                continue
             # Date filtering
             if start_date and tweet.date < start_date:
                 continue
@@ -422,8 +438,10 @@ class ScweetScraper(TweetScraper):
             logger.warning(f"Scweet: Unexpected error: {e}")
             return False
     
-    def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000):
+    def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000,
+                          resume_from_token=None, resume_from_tweet_id=None, collected_count=0):
         from Scweet.scweet import scrape
+        # Note: Scweet doesn't support pagination tokens
         import pandas as pd
         
         # Scweet uses different parameters
@@ -488,8 +506,10 @@ class TweeterPyScraper(TweetScraper):
             logger.debug(f"TweeterPy not available: {e}")
             return False
     
-    def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000):
+    def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000,
+                          resume_from_token=None, resume_from_tweet_id=None, collected_count=0):
         from tweeterpy import TweeterPy
+        # Note: TweeterPy doesn't support pagination tokens
         
         tp = TweeterPy()
         
@@ -688,16 +708,23 @@ class TwikitScraper(TweetScraper):
         
         return tweets
     
-    def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000):
+    def scrape_user_tweets(self, username: str, start_date=None, end_date=None, max_tweets=1000,
+                          resume_from_token=None, resume_from_tweet_id=None, collected_count=0):
         """Synchronous wrapper for async scraping"""
+        # Note: Twikit doesn't support pagination tokens
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         
+        # Adjust max_tweets based on collected_count
+        remaining = max_tweets - collected_count
+        if remaining <= 0:
+            return []  # Already collected enough
+        
         return loop.run_until_complete(
-            self._scrape_async(username, start_date, end_date, max_tweets)
+            self._scrape_async(username, start_date, end_date, remaining)
         )
 
 
@@ -736,7 +763,8 @@ class ScraperManager:
     def scrape_with_fallback(self, username: str, start_date=None, end_date=None, 
                            max_tweets=1000, exclude_retweets=False, 
                            exclude_replies=False, exclude_quotes=False,
-                           max_retries=2):
+                           max_retries=2, resume_from_token=None,
+                           resume_from_tweet_id=None, collected_count=0):
         """Try each scraper in sequence with retry logic until one succeeds"""
         import time
         
@@ -755,7 +783,10 @@ class ScraperManager:
                     
                     logger.info(f"Trying scraper: {scraper_name} (attempt {attempt + 1}/{max_retries + 1})")
                     tweets = scraper.scrape_user_tweets(
-                        username, start_date, end_date, max_tweets
+                        username, start_date, end_date, max_tweets,
+                        resume_from_token=resume_from_token,
+                        resume_from_tweet_id=resume_from_tweet_id,
+                        collected_count=collected_count
                     )
                     
                     if not tweets:

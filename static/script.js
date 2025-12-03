@@ -1,4 +1,177 @@
 let currentTweets = [];
+let currentRequestId = null;
+
+// Load queue and rate limit status on page load
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadQueue();
+    await updateRateLimitStatus();
+    // Update rate limit status every 30 seconds
+    setInterval(updateRateLimitStatus, 30000);
+});
+
+async function loadQueue() {
+    try {
+        const response = await fetch('/api/queue');
+        const data = await response.json();
+        
+        if (data.queue && data.queue.length > 0) {
+            displayQueue(data.queue);
+        } else {
+            document.getElementById('queueSection').style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Error loading queue:', error);
+    }
+}
+
+function displayQueue(queue) {
+    const queueSection = document.getElementById('queueSection');
+    const queueList = document.getElementById('queueList');
+    
+    queueSection.style.display = 'block';
+    queueList.innerHTML = '';
+    
+    queue.forEach(req => {
+        const queueItem = document.createElement('div');
+        queueItem.className = 'queue-item';
+        
+        const statusBadge = req.status === 'pending' ? 
+            '<span style="color: #ffc107;">⏳ Pending</span>' :
+            req.status === 'in_progress' ?
+            '<span style="color: #17a2b8;">🔄 In Progress</span>' :
+            req.status === 'completed' ?
+            '<span style="color: #28a745;">✅ Completed</span>' :
+            '<span style="color: #dc3545;">❌ Failed</span>';
+        
+        queueItem.innerHTML = `
+            <div class="queue-item-info">
+                <div class="queue-item-username">@${req.username}</div>
+                <div class="queue-item-details">
+                    ${req.start_date ? `From: ${req.start_date}` : ''} 
+                    ${req.end_date ? `To: ${req.end_date}` : ''}
+                    | Progress: ${req.progress} tweets
+                    | ${statusBadge}
+                </div>
+            </div>
+            <div class="queue-item-actions">
+                ${req.status === 'pending' ? 
+                    `<button class="btn btn-success btn-small" onclick="resumeRequest('${req.id}')">Resume</button>` : 
+                    ''}
+                ${req.status === 'completed' ? 
+                    `<button class="btn btn-success btn-small" onclick="viewResults('${req.id}')">View Results</button>` : 
+                    ''}
+                <button class="btn btn-danger btn-small" onclick="deleteRequest('${req.id}')">Delete</button>
+            </div>
+        `;
+        
+        queueList.appendChild(queueItem);
+    });
+}
+
+async function updateRateLimitStatus() {
+    try {
+        const response = await fetch('/api/rate-limit-status');
+        const status = await response.json();
+        
+        const statusDiv = document.getElementById('rateLimitStatus');
+        const statusText = document.getElementById('rateLimitText');
+        const waitText = document.getElementById('rateLimitWait');
+        
+        if (status.can_make_request) {
+            statusDiv.style.display = 'block';
+            statusDiv.style.background = '#d4edda';
+            statusDiv.style.borderColor = '#28a745';
+            statusText.textContent = `✅ Rate Limit: ${status.current_requests}/${status.limit} requests available`;
+            waitText.textContent = '';
+        } else {
+            statusDiv.style.display = 'block';
+            statusDiv.style.background = '#fff3cd';
+            statusDiv.style.borderColor = '#ffc107';
+            statusText.textContent = `⏳ Rate Limit: ${status.current_requests}/${status.limit} requests used`;
+            waitText.textContent = `Wait: ${status.wait_time_formatted || 'calculating...'}`;
+        }
+    } catch (error) {
+        console.error('Error updating rate limit status:', error);
+    }
+}
+
+async function resumeRequest(requestId) {
+    const btn = document.getElementById('scrapeBtn');
+    const btnText = document.getElementById('btnText');
+    const btnSpinner = document.getElementById('btnSpinner');
+    
+    btn.disabled = true;
+    btnText.textContent = 'Resuming...';
+    btnSpinner.style.display = 'inline';
+    
+    try {
+        const response = await fetch(`/api/queue/${requestId}/resume`, {
+            method: 'POST'
+        });
+        
+        const text = await response.text();
+        if (!text || text.trim() === '') {
+            throw new Error('Server returned empty response');
+        }
+        const data = JSON.parse(text);
+        
+        if (data.queued) {
+            showError(`Request is still queued. ${data.message}`);
+            await loadQueue();
+            await updateRateLimitStatus();
+        } else if (data.completed) {
+            currentTweets = data.tweets || [];
+            displayResults(currentTweets, data.count, data.username, data.scraper_used);
+            await loadQueue();
+            await updateRateLimitStatus();
+        } else if (data.in_progress) {
+            currentTweets = data.tweets || [];
+            currentRequestId = requestId;
+            displayResults(currentTweets, data.count, data.username, data.scraper_used);
+            showError(`Request in progress: ${data.progress} tweets collected. You can resume again later.`);
+            await loadQueue();
+            await updateRateLimitStatus();
+        } else {
+            currentTweets = data.tweets || [];
+            displayResults(currentTweets, data.count, data.username, data.scraper_used);
+            await loadQueue();
+            await updateRateLimitStatus();
+        }
+    } catch (error) {
+        showError('Failed to resume request: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btnText.textContent = 'Scrape Tweets';
+        btnSpinner.style.display = 'none';
+    }
+}
+
+async function deleteRequest(requestId) {
+    if (!confirm('Are you sure you want to delete this request?')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/queue/${requestId}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            await loadQueue();
+        } else {
+            const data = await response.json();
+            showError(data.error || 'Failed to delete request');
+        }
+    } catch (error) {
+        showError('Failed to delete request: ' + error.message);
+    }
+}
+
+async function viewResults(requestId) {
+    // This would need to fetch results from the queue
+    // For now, just show a message
+    alert('Viewing results for completed request. Results should be displayed when you resume.');
+}
 
 document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -9,6 +182,7 @@ document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
     const excludeRetweets = document.getElementById('exclude_retweets').checked;
     const excludeReplies = document.getElementById('exclude_replies').checked;
     const excludeQuotes = document.getElementById('exclude_quotes').checked;
+    const maxTweets = parseInt(document.getElementById('max_tweets').value) || 1000;
     
     if (!username) {
         showError('Please enter a username');
@@ -40,7 +214,8 @@ document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
                 end_date: endDate || null,
                 exclude_retweets: excludeRetweets,
                 exclude_replies: excludeReplies,
-                exclude_quotes: excludeQuotes
+                exclude_quotes: excludeQuotes,
+                max_tweets: maxTweets
             })
         });
         
@@ -56,13 +231,20 @@ document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
             throw new Error(`Server error: ${parseError.message}. Response may be empty or invalid.`);
         }
         
-        if (!response.ok) {
+        if (response.status === 202) {
+            // Request queued
+            showError(`Request queued: ${data.message || 'Rate limit reached'}`);
+            await loadQueue();
+            await updateRateLimitStatus();
+        } else if (!response.ok) {
             throw new Error(data.error || 'An error occurred');
+        } else {
+            // Success
+            currentTweets = data.tweets || [];
+            const scraperUsed = data.scraper_used || 'unknown';
+            displayResults(currentTweets, data.count, data.username, scraperUsed);
+            await updateRateLimitStatus();
         }
-        
-        currentTweets = data.tweets || [];
-        const scraperUsed = data.scraper_used || 'unknown';
-        displayResults(currentTweets, data.count, data.username, scraperUsed);
         
     } catch (error) {
         let errorMessage = error.message || 'Failed to scrape tweets. Please try again.';
@@ -198,4 +380,3 @@ async function downloadTweets(format) {
         alert('Failed to download tweets: ' + error.message);
     }
 }
-

@@ -47,3 +47,7 @@ Thumbs.db
 
 # Twikit cookies
 twikit_cookies.json
+
+# Rate limit and queue data
+rate_limits.json
+request_queue.json

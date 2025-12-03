@@ -14,6 +14,20 @@
         </header>
 
         <main>
+            <!-- Rate Limit Status -->
+            <div id="rateLimitStatus" class="rate-limit-status" style="display: none;">
+                <div class="status-info">
+                    <span id="rateLimitText"></span>
+                    <span id="rateLimitWait" style="margin-left: 10px; color: #888;"></span>
+                </div>
+            </div>
+
+            <!-- Queued Requests -->
+            <div id="queueSection" class="queue-section" style="display: none;">
+                <h3>Queued Requests</h3>
+                <div id="queueList" class="queue-list"></div>
+            </div>
+
             <form id="scrapeForm">
                 <div class="form-group">
                     <label for="username">Twitter Username:</label>
@@ -25,6 +39,20 @@
                         required
                         autocomplete="off"
                     >
+                </div>
+
+                <div class="form-group">
+                    <label for="max_tweets">Max Tweets (optional):</label>
+                    <input 
+                        type="number" 
+                        id="max_tweets" 
+                        name="max_tweets" 
+                        placeholder="1000" 
+                        min="1"
+                        max="10000"
+                        value="1000"
+                    >
+                    <small style="color: #666; display: block; margin-top: 5px;">Leave empty for default (1000)</small>
                 </div>
 
                 <div class="date-range">

@@ -7,6 +7,8 @@ import os
 from functools import wraps
 import logging
 from scrapers import ScraperManager
+from rate_limiter import RateLimiter
+from queue_manager import QueueManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +19,15 @@ app = Flask(__name__)
 # Initialize scraper manager once at startup
 scraper_manager = ScraperManager()
 logger.info(f"Initialized scrapers: {', '.join(scraper_manager.get_available_scrapers())}")
+
+# Initialize rate limiter and queue manager
+# Default to FREE tier, can be updated via environment variable
+api_tier = os.getenv('TWITTER_API_TIER', 'FREE').upper()
+rate_limiter = RateLimiter(tier=api_tier)
+queue_manager = QueueManager()
+
+# Clean up old completed requests on startup
+queue_manager.clear_completed()
 
 def handle_rate_limit(func):
     """Decorator to handle rate limiting and errors gracefully"""
@@ -42,8 +53,13 @@ def index():
 @app.route('/api/scrape', methods=['POST'])
 @handle_rate_limit
 def scrape_tweets():
-    """API endpoint to scrape tweets"""
+    """API endpoint to scrape tweets with rate limit checking and queuing"""
     data = request.json
+    
+    # Check if this is a resume request
+    request_id = data.get('request_id')
+    if request_id:
+        return resume_scrape(request_id)
     
     username = data.get('username', '').strip().lstrip('@')
     start_date = data.get('start_date')
@@ -51,6 +67,7 @@ def scrape_tweets():
     exclude_retweets = data.get('exclude_retweets', False)
     exclude_replies = data.get('exclude_replies', False)
     exclude_quotes = data.get('exclude_quotes', False)
+    max_tweets = data.get('max_tweets', 1000)
     
     if not username:
         return jsonify({'error': 'Username is required'}), 400
@@ -78,9 +95,33 @@ def scrape_tweets():
     if start_datetime and end_datetime and start_datetime > end_datetime:
         return jsonify({'error': 'Start date must be before end date'}), 400
     
-    # Use scraper manager with fallback
-    max_tweets = 10000  # Safety limit
+    # Check rate limit before making request
+    can_make, wait_time = rate_limiter.can_make_request()
     
+    if not can_make:
+        # Rate limited - add to queue
+        request_id = queue_manager.add_request(
+            username=username,
+            start_date=start_date,
+            end_date=end_date,
+            max_tweets=max_tweets,
+            exclude_retweets=exclude_retweets,
+            exclude_replies=exclude_replies,
+            exclude_quotes=exclude_quotes
+        )
+        
+        return jsonify({
+            'queued': True,
+            'request_id': request_id,
+            'message': f'Rate limit reached. Request queued. Wait time: {rate_limiter._format_wait_time(wait_time)}',
+            'wait_time_seconds': wait_time,
+            'rate_limit_status': rate_limiter.get_status()
+        }), 202  # 202 Accepted
+    
+    # Rate limit available - proceed with scraping
+    rate_limiter.record_request()
+    
+    # Use scraper manager with fallback
     result = scraper_manager.scrape_with_fallback(
         username=username,
         start_date=start_datetime,
@@ -97,7 +138,8 @@ def scrape_tweets():
             'count': result['count'],
             'username': username,
             'scraper_used': result['scraper_used'],
-            'total_before_filter': result.get('total_before_filter', result['count'])
+            'total_before_filter': result.get('total_before_filter', result['count']),
+            'rate_limit_status': rate_limiter.get_status()
         })
     else:
         # All scrapers failed - provide helpful error message
@@ -123,6 +165,240 @@ def scrape_tweets():
             'error': error_message,
             'errors': error_details,
             'available_scrapers': available_scrapers
+        }), 500
+
+def resume_scrape(request_id: str):
+    """Resume a queued scraping request"""
+    request = queue_manager.get_request(request_id)
+    if not request:
+        return jsonify({'error': 'Request not found'}), 404
+    
+    if request['status'] != 'pending':
+        return jsonify({'error': f'Request is {request["status"]}, cannot resume'}), 400
+    
+    # Check rate limit
+    can_make, wait_time = rate_limiter.can_make_request()
+    if not can_make:
+        return jsonify({
+            'queued': True,
+            'request_id': request_id,
+            'message': f'Still rate limited. Wait time: {rate_limiter._format_wait_time(wait_time)}',
+            'wait_time_seconds': wait_time,
+            'rate_limit_status': rate_limiter.get_status()
+        }), 202
+    
+    # Update status
+    queue_manager.update_request_status(request_id, 'in_progress')
+    
+    # Get pagination state
+    pagination = request['pagination']
+    resume_token = pagination.get('next_token')
+    resume_tweet_id = pagination.get('last_tweet_id')
+    collected_count = pagination.get('collected_tweets', 0)
+    remaining_tweets = request['max_tweets'] - collected_count
+    
+    if remaining_tweets <= 0:
+        queue_manager.update_request_status(request_id, 'completed')
+        return jsonify({
+            'tweets': request['results'],
+            'count': len(request['results']),
+            'username': request['username'],
+            'completed': True,
+            'message': 'Request already completed'
+        })
+    
+    # Parse dates
+    start_datetime = None
+    end_datetime = None
+    if request['start_date']:
+        start_datetime = datetime.datetime.strptime(request['start_date'], '%Y-%m-%d')
+        start_datetime = start_datetime.replace(tzinfo=datetime.timezone.utc)
+    if request['end_date']:
+        end_datetime = datetime.datetime.strptime(request['end_date'], '%Y-%m-%d')
+        end_datetime = end_datetime.replace(hour=23, minute=59, second=59, tzinfo=datetime.timezone.utc)
+    
+    # Record rate limit usage
+    rate_limiter.record_request()
+    
+    # Resume scraping
+    result = scraper_manager.scrape_with_fallback(
+        username=request['username'],
+        start_date=start_datetime,
+        end_date=end_datetime,
+        max_tweets=remaining_tweets,
+        exclude_retweets=request['filters']['exclude_retweets'],
+        exclude_replies=request['filters']['exclude_replies'],
+        exclude_quotes=request['filters']['exclude_quotes'],
+        resume_from_token=resume_token,
+        resume_from_tweet_id=resume_tweet_id,
+        collected_count=collected_count
+    )
+    
+    if result['success']:
+        # Add new tweets to results
+        new_tweets = result['tweets']
+        queue_manager.add_results(request_id, new_tweets)
+        
+        # Update pagination state (if available from result)
+        total_collected = collected_count + len(new_tweets)
+        last_tweet_id = new_tweets[-1]['id'] if new_tweets else resume_tweet_id
+        
+        # Try to get next_token from result if available
+        next_token = None  # Would need to be returned from scraper
+        
+        queue_manager.update_pagination(
+            request_id,
+            collected_tweets=total_collected,
+            last_tweet_id=last_tweet_id,
+            next_token=next_token
+        )
+        
+        # Check if completed
+        all_results = queue_manager.get_results(request_id)
+        if total_collected >= request['max_tweets'] or len(new_tweets) == 0:
+            queue_manager.update_request_status(request_id, 'completed')
+            return jsonify({
+                'tweets': all_results,
+                'count': len(all_results),
+                'username': request['username'],
+                'scraper_used': result['scraper_used'],
+                'completed': True,
+                'progress': f"{total_collected}/{request['max_tweets']}",
+                'rate_limit_status': rate_limiter.get_status()
+            })
+        else:
+            return jsonify({
+                'tweets': new_tweets,
+                'count': len(new_tweets),
+                'username': request['username'],
+                'scraper_used': result['scraper_used'],
+                'progress': f"{total_collected}/{request['max_tweets']}",
+                'request_id': request_id,
+                'in_progress': True,
+                'rate_limit_status': rate_limiter.get_status()
+            })
+    else:
+        queue_manager.update_request_status(request_id, 'failed')
+        return jsonify({
+            'error': 'Scraping failed',
+            'errors': result.get('errors', [])
+        }), 500
+
+def resume_scrape(request_id: str):
+    """Resume a queued scraping request"""
+    request = queue_manager.get_request(request_id)
+    if not request:
+        return jsonify({'error': 'Request not found'}), 404
+    
+    if request['status'] != 'pending':
+        return jsonify({'error': f'Request is {request["status"]}, cannot resume'}), 400
+    
+    # Check rate limit
+    can_make, wait_time = rate_limiter.can_make_request()
+    if not can_make:
+        return jsonify({
+            'queued': True,
+            'request_id': request_id,
+            'message': f'Still rate limited. Wait time: {rate_limiter._format_wait_time(wait_time)}',
+            'wait_time_seconds': wait_time,
+            'rate_limit_status': rate_limiter.get_status()
+        }), 202
+    
+    # Update status
+    queue_manager.update_request_status(request_id, 'in_progress')
+    
+    # Get pagination state
+    pagination = request['pagination']
+    resume_token = pagination.get('next_token')
+    resume_tweet_id = pagination.get('last_tweet_id')
+    collected_count = pagination.get('collected_tweets', 0)
+    remaining_tweets = request['max_tweets'] - collected_count
+    
+    if remaining_tweets <= 0:
+        queue_manager.update_request_status(request_id, 'completed')
+        return jsonify({
+            'tweets': request['results'],
+            'count': len(request['results']),
+            'username': request['username'],
+            'completed': True,
+            'message': 'Request already completed'
+        })
+    
+    # Parse dates
+    start_datetime = None
+    end_datetime = None
+    if request['start_date']:
+        start_datetime = datetime.datetime.strptime(request['start_date'], '%Y-%m-%d')
+        start_datetime = start_datetime.replace(tzinfo=datetime.timezone.utc)
+    if request['end_date']:
+        end_datetime = datetime.datetime.strptime(request['end_date'], '%Y-%m-%d')
+        end_datetime = end_datetime.replace(hour=23, minute=59, second=59, tzinfo=datetime.timezone.utc)
+    
+    # Record rate limit usage
+    rate_limiter.record_request()
+    
+    # Resume scraping
+    result = scraper_manager.scrape_with_fallback(
+        username=request['username'],
+        start_date=start_datetime,
+        end_date=end_datetime,
+        max_tweets=remaining_tweets,
+        exclude_retweets=request['filters']['exclude_retweets'],
+        exclude_replies=request['filters']['exclude_replies'],
+        exclude_quotes=request['filters']['exclude_quotes'],
+        resume_from_token=resume_token,
+        resume_from_tweet_id=resume_tweet_id,
+        collected_count=collected_count
+    )
+    
+    if result['success']:
+        # Add new tweets to results
+        new_tweets = result['tweets']
+        queue_manager.add_results(request_id, new_tweets)
+        
+        # Update pagination state (if available from result)
+        total_collected = collected_count + len(new_tweets)
+        last_tweet_id = new_tweets[-1]['id'] if new_tweets else resume_tweet_id
+        
+        # Try to get next_token from result if available
+        next_token = None  # Would need to be returned from scraper
+        
+        queue_manager.update_pagination(
+            request_id,
+            collected_tweets=total_collected,
+            last_tweet_id=last_tweet_id,
+            next_token=next_token
+        )
+        
+        # Check if completed
+        all_results = queue_manager.get_results(request_id)
+        if total_collected >= request['max_tweets'] or len(new_tweets) == 0:
+            queue_manager.update_request_status(request_id, 'completed')
+            return jsonify({
+                'tweets': all_results,
+                'count': len(all_results),
+                'username': request['username'],
+                'scraper_used': result['scraper_used'],
+                'completed': True,
+                'progress': f"{total_collected}/{request['max_tweets']}",
+                'rate_limit_status': rate_limiter.get_status()
+            })
+        else:
+            return jsonify({
+                'tweets': new_tweets,
+                'count': len(new_tweets),
+                'username': request['username'],
+                'scraper_used': result['scraper_used'],
+                'progress': f"{total_collected}/{request['max_tweets']}",
+                'request_id': request_id,
+                'in_progress': True,
+                'rate_limit_status': rate_limiter.get_status()
+            })
+    else:
+        queue_manager.update_request_status(request_id, 'failed')
+        return jsonify({
+            'error': 'Scraping failed',
+            'errors': result.get('errors', [])
         }), 500
 
 @app.route('/callback')
@@ -152,6 +428,46 @@ def oauth_callback():
         'status': 'ok',
         'note': 'This endpoint is required by X Developer Portal configuration but is not actively used for read-only scraping operations.'
     })
+
+@app.route('/api/rate-limit-status', methods=['GET'])
+def rate_limit_status():
+    """Get current rate limit status"""
+    status = rate_limiter.get_status()
+    return jsonify(status)
+
+@app.route('/api/queue', methods=['GET'])
+def get_queue():
+    """Get all queued requests"""
+    requests = queue_manager.get_all_requests()
+    # Format for frontend
+    formatted_requests = []
+    for req in requests:
+        formatted_requests.append({
+            'id': req['id'],
+            'username': req['username'],
+            'start_date': req['start_date'],
+            'end_date': req['end_date'],
+            'status': req['status'],
+            'created_at': req['created_at'],
+            'updated_at': req['updated_at'],
+            'progress': f"{req['pagination']['collected_tweets']}/{req['max_tweets']}",
+            'collected_tweets': req['pagination']['collected_tweets'],
+            'max_tweets': req['max_tweets']
+        })
+    return jsonify({'queue': formatted_requests})
+
+@app.route('/api/queue/<request_id>/resume', methods=['POST'])
+def resume_queue_request(request_id):
+    """Resume a queued request"""
+    return resume_scrape(request_id)
+
+@app.route('/api/queue/<request_id>', methods=['DELETE'])
+def delete_queue_request(request_id):
+    """Delete a queued request"""
+    success = queue_manager.delete_request(request_id)
+    if success:
+        return jsonify({'message': 'Request deleted'})
+    return jsonify({'error': 'Request not found'}), 404
 
 @app.route('/api/test-twikit', methods=['GET'])
 def test_twikit():
